@@ -1,0 +1,133 @@
+import os
+
+from flask import Flask, request
+from collections import Counter
+from time import time
+from sentence_transformers import SentenceTransformer
+from graph import get_algovera_graph, get_tec_graph
+from algorithm import pagerank
+from api_keys import tec, algovera
+from db import db
+
+app = Flask(__name__)
+
+app.logger.info("Starting app.")
+
+# Download the model.
+embedding_model = SentenceTransformer('./model')
+app.logger.info("Loaded model.")
+
+# Load the tec graph from the data.
+G_tec = get_tec_graph()
+app.logger.info("Loaded TEC graph.")
+
+# Load the algovera graph from the data.
+G_algovera = get_algovera_graph(embedding_model)
+app.logger.info("Loaded algovera graph.")
+
+
+def _verify_api_key(server, key):
+    """Verify the api key for the server"""
+
+    invalid_algovera = server == "algovera" and key != algovera
+    invalid_tec = server == "tec" and key != tec
+    invalid_server = server != "algovera" and server != "tec"
+
+    if invalid_algovera or invalid_tec:
+        raise Exception("invalid api key")
+    elif invalid_server:
+        raise Exception("invalid server")
+
+
+@app.route("/")
+def hello_world():
+    return "Hello World!"
+
+
+@app.route("/create_embedding", methods=['POST'])
+def create_embedding():
+    """Create an embedding vector for a firestore entry. 
+    Meant to be called from a firebase cloud function hook.
+
+    Parameters:    
+    -----
+    server : string
+        The server to which the entry was added.
+
+    api_key : string
+        The api key for the server.
+
+    doc_id : string
+        The Firestore ID of the added entry.
+
+    text : string
+        The textual content of the added entry."""
+
+    body = request.get_json()
+
+    api_key = body['api_key']
+    server = body['server']
+    doc_id = body['id']
+    text = body['text']
+
+    # Verify the API key.
+    try:
+        _verify_api_key(server, api_key)
+    except Exception as e:
+        app.logger.info(str(e))
+        return {"message": str(e)}
+
+    # Create the embedding vector from the text.
+    embedding = embedding_model.encode(text)
+
+    # Add the embedding to the document in Firestore.
+    db.collection(server).document(doc_id).update(
+        {'embedding': embedding.tolist()})
+
+    return {"message": "success!"}
+
+
+@app.route("/query", methods=['POST'])
+def query():
+    """Query the PageRank model for the specified server.
+
+    Parameters:    
+    -----
+    server : string
+        The server to query for.
+
+    api_key : string
+        The api key for the server.
+
+    query : string
+        The textual query."""
+
+    body = request.get_json()
+    query = body['query']
+    server = body['server']
+    api_key = body['api_key']
+
+    # Verify the API key.
+    try:
+        _verify_api_key(server, api_key)
+    except:
+        return {"message": "invalid api key"}
+
+    start = time()
+
+    # Run the pagerank model.
+    if server == "algovera":
+        results = pagerank(G_algovera.copy(), query,
+                           embedding_model, drop_irrelevant_threshold=0.0, n_results=3)
+    elif server == "tec":
+        results = pagerank(G_tec.copy(), query, embedding_model, n_results=3)
+
+    app.logger.info("PageRank model for {} took {} seconds".format(
+        server, time() - start))
+
+    # Return the results.
+    return results
+
+
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
