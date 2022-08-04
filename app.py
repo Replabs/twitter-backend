@@ -141,9 +141,14 @@ def create_twitter_embeddings():
     text : string
         The textual content of the added entry."""
 
+    start = time()
+
     body = request.get_json()
 
+    # The API key.
     api_key = body['api_key']
+
+    # The tweets.
     tweets = body['tweets']
 
     # Verify the API key.
@@ -151,18 +156,23 @@ def create_twitter_embeddings():
         app.logger.info("invalid twitter api key")
         return {"error": "invalid api key"}
 
-    # Create the embedding vector from the text.
+    app.logger.info(f"Creating embeddings for {len(tweets)} tweets...")
+
+    # Create the embedding vectors from the text.
     tweet_embeddings = embedding_model.encode(
-        [t['referenced_tweet']['text'] for t in tweets])
+        [t['text'] for t in tweets])
     referenced_tweet_embeddings = embedding_model.encode(
         [t['referenced_tweet']['text'] for t in tweets])
 
     # Add the embeddings to the tweets.
-    for tweet, i in enumerate(tweets):
+    for i, tweet in enumerate(tweets):
         tweet['embedding'] = tweet_embeddings[i].tolist()
         tweet['referenced_tweet']['embedding'] = referenced_tweet_embeddings[i].tolist()
 
-    # Return the tweets.
+    app.logger.info(
+        f"Created embeddings for {len(tweets)} tweets, took {time() - start}s.")
+
+    # Return the updated tweets.
     return {"tweets": tweets}
 
 
