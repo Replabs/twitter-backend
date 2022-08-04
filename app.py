@@ -6,7 +6,7 @@ from time import time
 from sentence_transformers import SentenceTransformer
 from graph import get_algovera_graph, get_tec_graph
 from algorithm import pagerank
-from api_keys import tec, algovera
+from api_keys import tec, algovera, twitter_api_key
 from db import db
 
 app = Flask(__name__)
@@ -127,6 +127,43 @@ def query():
 
     # Return the results.
     return results
+
+
+@app.route("/twitter/create_embeddings", methods=['POST'])
+def create_twitter_embeddings():
+    """Create embedding vectors for tweets. 
+
+    Parameters:    
+    -----
+    api_key : string
+        The api key for twitter.
+
+    text : string
+        The textual content of the added entry."""
+
+    body = request.get_json()
+
+    api_key = body['api_key']
+    tweets = body['tweets']
+
+    # Verify the API key.
+    if api_key != twitter_api_key:
+        app.logger.info("invalid twitter api key")
+        return {"error": "invalid api key"}
+
+    # Create the embedding vector from the text.
+    tweet_embeddings = embedding_model.encode(
+        [t['referenced_tweet']['text'] for t in tweets])
+    referenced_tweet_embeddings = embedding_model.encode(
+        [t['referenced_tweet']['text'] for t in tweets])
+
+    # Add the embeddings to the tweets.
+    for tweet, i in enumerate(tweets):
+        tweet['embedding'] = tweet_embeddings[i].tolist()
+        tweet['referenced_tweet']['embedding'] = referenced_tweet_embeddings[i].tolist()
+
+    # Return the tweets.
+    return {"tweets": tweets}
 
 
 if __name__ == "__main__":
