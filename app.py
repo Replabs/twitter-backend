@@ -1,12 +1,9 @@
 import os
 
 from flask import Flask, request
-from collections import Counter
 from time import time
 from sentence_transformers import SentenceTransformer
-from graph import get_algovera_graph, get_tec_graph
-from algorithm import pagerank
-from api_keys import tec, algovera, twitter_api_key
+from api_keys import twitter_api_key
 from db import db
 
 app = Flask(__name__)
@@ -17,116 +14,96 @@ app.logger.info("Starting app.")
 embedding_model = SentenceTransformer('./model')
 app.logger.info("Loaded model.")
 
-# Load the tec graph from the data.
-G_tec = get_tec_graph()
-app.logger.info("Loaded TEC graph.")
-
-# Load the algovera graph from the data.
-G_algovera = get_algovera_graph(embedding_model)
-app.logger.info("Loaded algovera graph.")
-
-
-def _verify_api_key(server, key):
-    """Verify the api key for the server"""
-
-    invalid_algovera = server == "algovera" and key != algovera
-    invalid_tec = server == "tec" and key != tec
-    invalid_server = server != "algovera" and server != "tec"
-
-    if invalid_algovera or invalid_tec:
-        raise Exception("invalid api key")
-    elif invalid_server:
-        raise Exception("invalid server")
-
 
 @app.route("/")
 def hello_world():
     return "Hello World!"
 
 
-@app.route("/create_embedding", methods=['POST'])
-def create_embedding():
-    """Create an embedding vector for a firestore entry. 
-    Meant to be called from a firebase cloud function hook.
+@app.route("/twitter/query", methods=['POST'])
+def query_twitter():
+    """Query a twitter list, given a topic.
 
     Parameters:    
     -----
-    server : string
-        The server to which the entry was added.
-
     api_key : string
-        The api key for the server.
+        The api key for twitter.
 
-    doc_id : string
-        The Firestore ID of the added entry.
+    tweets : string
+        The tweets to construct a graph from.
 
-    text : string
-        The textual content of the added entry."""
-
-    body = request.get_json()
-
-    api_key = body['api_key']
-    server = body['server']
-    doc_id = body['id']
-    text = body['text']
-
-    # Verify the API key.
-    try:
-        _verify_api_key(server, api_key)
-    except Exception as e:
-        app.logger.info(str(e))
-        return {"message": str(e)}
-
-    # Create the embedding vector from the text.
-    embedding = embedding_model.encode(text)
-
-    # Add the embedding to the document in Firestore.
-    db.collection(server).document(doc_id).update(
-        {'embedding': embedding.tolist()})
-
-    return {"message": "success!"}
-
-
-@app.route("/query", methods=['POST'])
-def query():
-    """Query the PageRank model for the specified server.
-
-    Parameters:    
-    -----
-    server : string
-        The server to query for.
-
-    api_key : string
-        The api key for the server.
-
-    query : string
-        The textual query."""
-
-    body = request.get_json()
-    query = body['query']
-    server = body['server']
-    api_key = body['api_key']
-
-    # Verify the API key.
-    try:
-        _verify_api_key(server, api_key)
-    except:
-        return {"message": "invalid api key"}
-
+    topic : string
+        The topic to query for.    
+    """
     start = time()
 
-    # Run the pagerank model.
-    if server == "algovera":
-        results = pagerank(G_algovera.copy(), query,
-                           embedding_model, drop_irrelevant_threshold=0.0, n_results=3)
-    elif server == "tec":
-        results = pagerank(G_tec.copy(), query, embedding_model, n_results=3)
+    body = request.get_json()
 
-    app.logger.info("PageRank model for {} took {} seconds".format(
-        server, time() - start))
+    topic = body['topic']
+    tweets = body['tweets']
+    api_key = body['api_key']
 
-    # Return the results.
-    return results
+    # Verify the API key.
+    if api_key != twitter_api_key:
+        app.logger.info("invalid twitter api key")
+        return {"error": "invalid api key"}
+
+    # Fetch the list members from firestore.
+    ref = db.collection('lists').document(list_id).get()
+
+    print(ref)
+    print(ref.data)
+
+    return {}
+
+#    print(ref)
+
+    # Create items from all firestore docs.
+    #items = list(map(lambda x: {**x.to_dict(), 'id': x.id}, stream))
+
+
+@app.route("/twitter/embed_all", methods=["POST"])
+def embed_all():
+    start = time()
+
+    print("foo")
+
+    # Stream the firebase docs.
+    docs = db.collection('tweets').stream()
+
+    # Create items from all firestore docs.
+    tweets = map(lambda x: {**x.to_dict(), 'id': x.id}, docs)
+
+    tweets_with_referenced_tweet = list(filter(
+        lambda t: t['referenced_tweet'], tweets))
+
+    tweets_without_referenced_tweet = list(filter(
+        lambda t: not t['referenced_tweet'], tweets))
+
+    # Create the embedding vectors from the text.
+    referenced_tweet_embeddings = embedding_model.encode(
+        [t['referenced_tweet']['text'] for t in tweets_with_referenced_tweet])
+
+    # Add the embeddings to the tweets.
+    for i, tweet in enumerate(tweets_with_referenced_tweet):
+        tweet['sentiment'] = 1
+        tweet['referenced_tweet']['embedding'] = referenced_tweet_embeddings[i].tolist()
+
+    for tweet in tweets_without_referenced_tweet:
+        tweet['sentiment'] = 1
+
+    tweets = tweets_with_referenced_tweet + tweets_without_referenced_tweet
+
+    app.logger.info(
+        f"Created embeddings for {len(tweets)} tweets, took {time() - start}s.")
+
+    # Update the tweets in firestore.
+    for tweet in tweets:
+        db.collection('tweets').document(tweet['id']).update(tweet)
+
+    print(f"finished. Took {time() - start}")
+
+    return {"success": True}
 
 
 @app.route("/twitter/create_embeddings", methods=['POST'])
@@ -138,8 +115,8 @@ def create_twitter_embeddings():
     api_key : string
         The api key for twitter.
 
-    text : string
-        The textual content of the added entry."""
+    tweets : list
+        The tweets for which to calculate embeddings."""
 
     start = time()
 
@@ -172,8 +149,9 @@ def create_twitter_embeddings():
     app.logger.info(
         f"Created embeddings for {len(tweets)} tweets, took {time() - start}s.")
 
-    # Return the updated tweets.
-    return {"tweets": tweets}
+    # Update the tweets in firestore.
+    for tweet in tweets:
+        db.collection('tweets').document(tweet.id).update(tweet)
 
 
 if __name__ == "__main__":
