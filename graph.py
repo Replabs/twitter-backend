@@ -1,6 +1,6 @@
 """Initialize the graphs from firestore data."""
 
-import datetime
+from datetime import datetime
 from os.path import exists
 from db import db
 import networkx as nx
@@ -47,8 +47,6 @@ def _create_edge(tweet):
         'reply_tweet': tweet['text'],
     }
 
-    print(properties['embedding'].shape)
-
     return (src, dst, properties)
 
 
@@ -65,16 +63,18 @@ def initialize_graphs(graphs):
 
     for l in lists:
         print(f"Initializing graph {l['name']}.")
-        name = l['name']
         day = datetime.now().strftime("%m%d%y")
 
         # The path for the pickle file.
-        path = f"graphs/{name}_{day}.gpickle"
+        path = f"graphs/{l['id']}_{day}.gpickle"
 
-        # If a pickled file already exists for today, return it.
+        # If a pickled file already exists for today,
+        # add it to the dictionary and continue.
         if exists(path):
+            print(f"Graph {l['id']} already on disk, skipping...")
             G = nx.read_gpickle(path)
-            return nx.freeze(G)
+            graphs[l['id']] = nx.freeze(G)
+            continue
 
         # Fetch tweets for all members of the list.
         tweets = _fetch_tweets(l['members'])
@@ -83,17 +83,15 @@ def initialize_graphs(graphs):
         G = nx.MultiDiGraph()
 
         # Add edges from the tweets.
-        G.add_edges_from(map(lambda x: _create_edge(x), tweets,))
+        G.add_edges_from(map(lambda x: _create_edge(x), tweets))
 
-        #
         # Save the graph to disk.
-        #
-        name = l['name']
-        day = datetime.now().strftime("%m%d%y")
-        nx.write_gpickle(G, f"graphs/{name}_{day}.gpickle")
+        nx.write_gpickle(G, path)
 
         # Add the graph to the dictionary.
         graphs[l['id']] = nx.freeze(G)
 
+        print(f"Created graph for {l['name']} with {len(tweets)} tweets.")
+
     print(
-        f"Finished initializing {len(list(lists))} graphs. Took {time() - start} seconds.")
+        f"Finished initializing {len(graphs)} graphs. Took {time() - start} seconds.")

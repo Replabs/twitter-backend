@@ -7,7 +7,7 @@ from transformers import pipeline
 from api_keys import twitter_api_key
 from algorithm import pagerank
 from db import db
-from twitter_plugin.backend.graph import initialize_graphs
+from graph import initialize_graphs
 
 app = Flask(__name__)
 
@@ -77,7 +77,7 @@ def query_twitter():
         return {"error": "Graph not initialized."}
 
     # The graph for the list.
-    G = graphs[list_id].copy().unfreeze()
+    G = graphs[list_id].copy()
 
     # Run the pagerank algorithm.
     results = pagerank(G, topic, embedding_model)
