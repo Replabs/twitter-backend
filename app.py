@@ -3,15 +3,22 @@ import os
 from flask import Flask, request
 from time import time
 from sentence_transformers import SentenceTransformer
+from transformers import pipeline
 from api_keys import twitter_api_key
+from algorithm import pagerank
 from db import db
 
 app = Flask(__name__)
 
 app.logger.info("Starting app.")
 
-# Download the model.
-embedding_model = SentenceTransformer('./model')
+# Download the embedding model.
+embedding_model = SentenceTransformer('./embedding_model')
+
+# Download the sentiment model.
+sentiment_task = pipeline(
+    'sentiment-analysis', model='./sentiment_model', tokenizer='./sentiment_model')
+
 app.logger.info("Loaded model.")
 
 
@@ -24,45 +31,72 @@ def hello_world():
 def query_twitter():
     """Query a twitter list, given a topic.
 
-    Parameters:    
+    Parameters:
     -----
     api_key : string
         The api key for twitter.
 
-    tweets : string
-        The tweets to construct a graph from.
+    list_id : string
+        The ID of the list to query.
 
     topic : string
-        The topic to query for.    
+        The topic to query for.
     """
+    print("Start query")
+
     start = time()
 
     body = request.get_json()
 
-    topic = body['topic']
-    tweets = body['tweets']
     api_key = body['api_key']
+    list_id = body['list_id']
+    topic = body['topic']
 
     # Verify the API key.
     if api_key != twitter_api_key:
         app.logger.info("invalid twitter api key")
         return {"error": "invalid api key"}
 
-    # Fetch the list members from firestore.
-    ref = db.collection('lists').document(list_id).get()
+    # Fetch the relevant list members.
+    members = db.collection('lists').document(
+        list_id).get().to_dict()['members']
 
-    print(ref)
-    print(ref.data)
+    # The tweets for which to run PageRank.
+    tweets = []
 
-    return {}
+    for member in members:
+        # Get the tweets from the member.
+        id = member['id']
+        docs = db.collection('tweets').where(
+            u'author_id', u'==', id).stream()
 
-#    print(ref)
+        # Map the documents to dictionaries.
+        t = map(lambda x: {**x.to_dict(), 'id': x.id}, docs)
 
-    # Create items from all firestore docs.
-    #items = list(map(lambda x: {**x.to_dict(), 'id': x.id}, stream))
+        #
+        # Only include reference tweets that are not referencing the author,
+        # and tweet that references tweets within the original list.
+        #
+        t = filter(
+            lambda t: t['referenced_tweet']
+            and t['referenced_tweet']['author_id'] != t['author_id']
+            and t['referenced_tweet']['embedding'] is not None
+            and t['referenced_tweet']['author_id'] in [m['id'] for m in members], t)
+
+        # Accumulate tweets from all list members.
+        tweets = tweets + list(t)
+
+    print(
+        f"Finished fetching {len(tweets)} tweets. Took {time() - start} seconds.")
+
+    # Run the pagerank algorithm.
+    results = pagerank(tweets, topic, embedding_model)
+
+    # Return the results.
+    return {"results": results}
 
 
-@app.route("/twitter/embed_all", methods=["POST"])
+@ app.route("/twitter/embed_all", methods=["POST"])
 def embed_all():
     start = time()
 
@@ -106,11 +140,11 @@ def embed_all():
     return {"success": True}
 
 
-@app.route("/twitter/create_embeddings", methods=['POST'])
+@ app.route("/twitter/create_embeddings", methods=['POST'])
 def create_twitter_embeddings():
-    """Create embedding vectors for tweets. 
+    """Create embedding vectors for tweets.
 
-    Parameters:    
+    Parameters:
     -----
     api_key : string
         The api key for twitter.
