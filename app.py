@@ -7,6 +7,7 @@ from transformers import pipeline
 from api_keys import twitter_api_key
 from algorithm import pagerank
 from db import db
+from twitter_plugin.backend.graph import initialize_graphs
 
 app = Flask(__name__)
 
@@ -19,6 +20,11 @@ embedding_model = SentenceTransformer('./embedding_model')
 sentiment_task = pipeline(
     'sentiment-analysis', model='./sentiment_model', tokenizer='./sentiment_model')
 
+graphs = {}
+
+# Prepare the Graphs.
+initialize_graphs(graphs)
+
 app.logger.info("Loaded model.")
 
 
@@ -27,9 +33,29 @@ def hello_world():
     return "Hello World!"
 
 
-@app.route("/twitter/query", methods=['POST'])
+@app.route("/update_graphs", methods=['POST'])
+def update_graphs():
+    """Update the graphs in memory and on disk  from the latest Firestore data."""
+    start = time()
+
+    body = request.get_json()
+
+    # Verify the API key.
+    if body['api_key'] != twitter_api_key:
+        app.logger.info("invalid twitter api key")
+        return {"error": "invalid api key"}
+
+    # Initialize the graphs anew. This will take some time.
+    initialize_graphs(graphs)
+
+    print(f"Finished updating graphs. Took {time() - start} seconds.")
+
+    return {"success": True}
+
+
+@app.route("/pagerank", methods=['POST'])
 def query_twitter():
-    """Query a twitter list, given a topic.
+    """Get the PageRank scores for a list, given a topic.
 
     Parameters:
     -----
@@ -42,65 +68,41 @@ def query_twitter():
     topic : string
         The topic to query for.
     """
-    print("Start query")
-
-    start = time()
-
     body = request.get_json()
 
-    api_key = body['api_key']
     list_id = body['list_id']
     topic = body['topic']
 
-    # Verify the API key.
-    if api_key != twitter_api_key:
-        app.logger.info("invalid twitter api key")
-        return {"error": "invalid api key"}
+    if list_id not in graphs:
+        return {"error": "Graph not initialized."}
 
-    # Fetch the relevant list members.
-    members = db.collection('lists').document(
-        list_id).get().to_dict()['members']
-
-    # The tweets for which to run PageRank.
-    tweets = []
-
-    for member in members:
-        # Get the tweets from the member.
-        id = member['id']
-        docs = db.collection('tweets').where(
-            u'author_id', u'==', id).stream()
-
-        # Map the documents to dictionaries.
-        t = map(lambda x: {**x.to_dict(), 'id': x.id}, docs)
-
-        #
-        # Only include reference tweets that are not referencing the author,
-        # and tweet that references tweets within the original list.
-        #
-        t = filter(
-            lambda t: t['referenced_tweet']
-            and t['referenced_tweet']['author_id'] != t['author_id']
-            and t['referenced_tweet']['embedding'] is not None
-            and t['referenced_tweet']['author_id'] in [m['id'] for m in members], t)
-
-        # Accumulate tweets from all list members.
-        tweets = tweets + list(t)
-
-    print(
-        f"Finished fetching {len(tweets)} tweets. Took {time() - start} seconds.")
+    # The graph for the list.
+    G = graphs[list_id].copy().unfreeze()
 
     # Run the pagerank algorithm.
-    results = pagerank(tweets, topic, embedding_model)
+    results = pagerank(G, topic, embedding_model)
 
     # Return the results.
     return {"results": results}
 
 
-@ app.route("/twitter/embed_all", methods=["POST"])
+@app.route("/embed_all", methods=["POST"])
 def embed_all():
+    """Embed all tweets. Might take minutes to finish.
+
+    Parameters:
+    -----
+    api_key : string
+        The api key for twitter."""
+
     start = time()
 
-    print("foo")
+    body = request.json()
+
+    # Verify the API key.
+    if body['api_key'] != twitter_api_key:
+        app.logger.info("invalid twitter api key")
+        return {"error": "invalid api key"}
 
     # Stream the firebase docs.
     docs = db.collection('tweets').stream()
@@ -108,25 +110,20 @@ def embed_all():
     # Create items from all firestore docs.
     tweets = map(lambda x: {**x.to_dict(), 'id': x.id}, docs)
 
-    tweets_with_referenced_tweet = list(filter(
-        lambda t: t['referenced_tweet'], tweets))
+    # Exclude tweets without a referenced tweet.
+    tweets = list(filter(lambda t: t['referenced_tweet'], tweets))
 
-    tweets_without_referenced_tweet = list(filter(
-        lambda t: not t['referenced_tweet'], tweets))
+    # Create the embedding vectors for the text of the referenced tweet.
+    embeddings = embedding_model.encode(
+        [t['referenced_tweet']['text'] for t in tweets])
 
-    # Create the embedding vectors from the text.
-    referenced_tweet_embeddings = embedding_model.encode(
-        [t['referenced_tweet']['text'] for t in tweets_with_referenced_tweet])
+    # Create the sentiment scores for the text of the tweet.
+    sentiments = sentiment_task([t['text']
+                                for t in tweets])
 
-    # Add the embeddings to the tweets.
-    for i, tweet in enumerate(tweets_with_referenced_tweet):
-        tweet['sentiment'] = 1
-        tweet['referenced_tweet']['embedding'] = referenced_tweet_embeddings[i].tolist()
-
-    for tweet in tweets_without_referenced_tweet:
-        tweet['sentiment'] = 1
-
-    tweets = tweets_with_referenced_tweet + tweets_without_referenced_tweet
+    for i, tweet in enumerate(tweets):
+        tweet['sentiment'] = sentiments[i]['score']
+        tweet['referenced_tweet']['embedding'] = embeddings[i].tolist()
 
     app.logger.info(
         f"Created embeddings for {len(tweets)} tweets, took {time() - start}s.")
@@ -140,9 +137,9 @@ def embed_all():
     return {"success": True}
 
 
-@ app.route("/twitter/create_embeddings", methods=['POST'])
+@app.route("/embed", methods=['POST'])
 def create_twitter_embeddings():
-    """Create embedding vectors for tweets.
+    """Calculate embedding vectors and sentiment scores for tweets.
 
     Parameters:
     -----
@@ -169,16 +166,21 @@ def create_twitter_embeddings():
 
     app.logger.info(f"Creating embeddings for {len(tweets)} tweets...")
 
-    # Create the embedding vectors from the text.
-    tweet_embeddings = embedding_model.encode(
-        [t['text'] for t in tweets])
-    referenced_tweet_embeddings = embedding_model.encode(
+    # Filter out tweets without a referenced_tweet.
+    tweets = filter(lambda x: 'referenced_tweet' in x, tweets)
+
+    # Create the embedding vectors for the text of the referenced tweet.
+    embeddings = embedding_model.encode(
         [t['referenced_tweet']['text'] for t in tweets])
 
-    # Add the embeddings to the tweets.
+    # Create the sentiment scores for the text of the tweet.
+    sentiments = sentiment_task([t['text']
+                                for t in tweets])
+
+    # Add the embeddings and sentiments to the tweets.
     for i, tweet in enumerate(tweets):
-        tweet['embedding'] = tweet_embeddings[i].tolist()
-        tweet['referenced_tweet']['embedding'] = referenced_tweet_embeddings[i].tolist()
+        tweet['sentiment'] = sentiments[i]['score']
+        tweet['referenced_tweet']['embedding'] = embeddings[i].tolist()
 
     app.logger.info(
         f"Created embeddings for {len(tweets)} tweets, took {time() - start}s.")
@@ -186,6 +188,8 @@ def create_twitter_embeddings():
     # Update the tweets in firestore.
     for tweet in tweets:
         db.collection('tweets').document(tweet.id).update(tweet)
+
+    return {"success": True}
 
 
 if __name__ == "__main__":
