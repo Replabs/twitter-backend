@@ -1,6 +1,9 @@
+from email import header
 import os
 
+import requests
 from flask import Flask, request
+from flask_cors import CORS
 from time import time
 from sentence_transformers import SentenceTransformer
 from transformers import pipeline
@@ -8,8 +11,12 @@ from api_keys import twitter_api_key
 from algorithm import pagerank
 from db import db
 from graph import initialize_graphs
+from firebase_admin import auth
+from keywords import keywords
 
 app = Flask(__name__)
+
+CORS(app)
 
 app.logger.info("Starting app.")
 
@@ -33,9 +40,162 @@ def hello_world():
     return "Hello World!"
 
 
+@app.route("/login", methods=['POST'])
+def log_in():
+    """Log in a Firebase user from a Twitter Oauth token."""
+    body = request.get_json()
+
+    #
+    # Use the access token to get the twitter user from the Twitter API.
+    #
+    access_token = body['access_token']
+
+    if not access_token:
+        return {"error": "No access token."}
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + access_token,
+        "expansions": ["profile_image_url"],
+    }
+
+    response = requests.get(
+        "https://api.twitter.com/2/users/me", headers=headers)
+
+    user = response.json()['data']
+
+    #
+    # Login the user manually.
+    #
+    token = auth.create_custom_token(user['id'])
+
+    return {
+        "token": token.decode("utf-8"),
+        "user": user
+    }
+
+
+@app.route("/proxy/oauth", methods=['POST'])
+def proxy_oauth_token():
+    body = request.get_json()
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+
+    # Make the upstream api call.
+    response = requests.post(
+        "https://api.twitter.com/2/oauth2/token", data=body, headers=headers)
+
+    return response.json()
+
+
+@app.route("/signup", methods=['POST'])
+def sign_up():
+    """Create a user in Firebase from a Twitter Oauth token and return a Firebase login token."""
+    body = request.get_json()
+
+    #
+    # Use the access token to get the twitter user from the Twitter API.
+    #
+    access_token = body['access_token']
+
+    if not access_token:
+        return {"error": "No access token."}
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + access_token,
+    }
+
+    response = requests.get(
+        "https://api.twitter.com/2/users/me?user.fields=profile_image_url", headers=headers)
+
+    user = response.json()['data']
+
+    #
+    # Add the user to Firebase, if it doesn't already exist.
+    #
+    try:
+        _ = auth.get_user(user['id'])
+        print("found user")
+    except:
+        print("Did not find user")
+        auth.create_user(
+            uid=user['id'],
+            display_name=user['username'],
+            photo_url=user['profile_image_url']
+        )
+
+        db.collection('users').document(user['id']).set(user)
+
+    #
+    # Login the user.
+    #
+    token = auth.create_custom_token(user['id'])
+
+    return {"user": user, "token": token.decode("utf-8")}
+
+
+@app.route("/results", methods=['GET'])
+def get_results():
+    """Get the results for a user."""
+
+    start = time()
+
+    #
+    # Use the access token to get the twitter user from the Twitter API.
+    #
+    access_token = request.headers["access_token"]
+
+    if not access_token:
+        return {"error": "No access token."}
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + access_token,
+    }
+
+    response = requests.get(
+        "https://api.twitter.com/2/users/me", headers=headers)
+
+    user = response.json()['data']
+
+    #
+    # Get the PageRank results for the user.
+    #
+    lists = db.collection('lists').where(u'owner_id', u'==', user['id']).get()
+
+    results = {}
+
+    for doc in lists.docs:
+        if doc.id not in graphs:
+            print(f"Skipping list {doc.id}, not in memory.")
+            continue
+
+        # The graph of the list.
+        G = graphs[doc.id].copy()
+
+        result = {}
+
+        # Add the pagerank results for each keyword.
+        for keyword in keywords:
+            result[keyword] = pagerank(
+                G, None, embedding_model, topic_embedding=keywords[keyword], n_results=10)
+
+    print(f"/requests took {time() - start} seconds.")
+
+    # Return the results.
+    return {"results": results}
+
+
 @app.route("/update_graphs", methods=['POST'])
 def update_graphs():
-    """Update the graphs in memory and on disk  from the latest Firestore data."""
+    """Update the graphs in memory and on disk from the latest Firestore data.
+
+    Parameters:
+    -----
+    api_key : string
+        The api key for twitter.
+    """
+
     start = time()
 
     body = request.get_json()
@@ -119,7 +279,7 @@ def embed_all():
 
     # Create the sentiment scores for the text of the tweet.
     sentiments = sentiment_task([t['text']
-                                for t in tweets])
+                                 for t in tweets])
 
     for i, tweet in enumerate(tweets):
         tweet['sentiment'] = sentiments[i]['score']
@@ -175,7 +335,7 @@ def create_twitter_embeddings():
 
     # Create the sentiment scores for the text of the tweet.
     sentiments = sentiment_task([t['text']
-                                for t in tweets])
+                                 for t in tweets])
 
     # Add the embeddings and sentiments to the tweets.
     for i, tweet in enumerate(tweets):
@@ -193,4 +353,5 @@ def create_twitter_embeddings():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    app.run(debug=True, host="0.0.0.0",
+            port=int(os.environ.get("PORT", 8080)))

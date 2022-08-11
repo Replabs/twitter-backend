@@ -40,7 +40,7 @@ def _average_incoming_weights(G, node, exp=None):
     return mean_incoming
 
 
-def _weigh_graph(G, topic, embedding_model, sentiment_weight=0.2, similarity_weight=1.0):
+def _weigh_graph(G, topic, embedding_model, sentiment_weight=0.2, similarity_weight=1.0, topic_embedding=None):
     """Weight the graph against the topic.
 
     Parameters
@@ -50,6 +50,10 @@ def _weigh_graph(G, topic, embedding_model, sentiment_weight=0.2, similarity_wei
 
     topic : string
         The topic to weight the graph against.
+
+    topic_embedding : np.array, Optional
+        The embedding of the topic to weight the graph against.
+        Used instead of topic if provided.
 
     embedding_model : SentenceTransformer
         The embedding model used to create embeddings for the topic.
@@ -66,7 +70,8 @@ def _weigh_graph(G, topic, embedding_model, sentiment_weight=0.2, similarity_wei
     start = time()
 
     # The embedding of the topic.
-    topic_embedding = np.expand_dims(embedding_model.encode(topic), 0)
+    if topic_embedding is None:
+        topic_embedding = np.expand_dims(embedding_model.encode(topic), 0)
 
     # The embeddings of each edge in the MultiDiGraph.
     edge_embeddings = np.asarray(
@@ -116,7 +121,7 @@ def _weigh_graph(G, topic, embedding_model, sentiment_weight=0.2, similarity_wei
     return F
 
 
-def pagerank(G, topic, embedding_model, n_results=None):
+def pagerank(G, topic, embedding_model, n_results=None, topic_embedding=None):
     """Run the main pagerank algorithm.
 
     Parameters
@@ -127,13 +132,18 @@ def pagerank(G, topic, embedding_model, n_results=None):
     topic : string
         The topic to query for.
 
+    topic_embedding : np.array, Optional
+        The embedding of the topic to query for.
+        If provided, the topic is ignored.
+
     n_results: int, Optional
         How many nodes to include in the results.
         None means include all results.
     """
 
     # Weigh the graph.
-    G = _weigh_graph(G, topic, embedding_model)
+    G = _weigh_graph(G, topic, embedding_model,
+                     topic_embedding=topic_embedding)
 
     # Create a personalization vector by averaging all incoming weights and applying
     # an exponential value to the result.
@@ -148,5 +158,12 @@ def pagerank(G, topic, embedding_model, n_results=None):
     print(
         f"Finished calculating pagerank for graph with {len(G.edges)} nodes. Took {time() - start} seconds.")
 
-    # Return the sorted results.
-    return sorted(results.items(), key=lambda x: x[1], reverse=True)
+    # Sort the results.
+    results = sorted(results.items(), key=lambda x: x[1], reverse=True)
+
+    # Truncate the results if applicable.
+    if n_results is not None and len(results) > n_results:
+        results = results[n_results]
+
+    # Return the results.
+    return results
