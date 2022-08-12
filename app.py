@@ -261,7 +261,7 @@ def create_twitter_embeddings():
 
     # Add the embeddings and sentiments to the tweets.
     for i, tweet in enumerate(tweets):
-        tweet['sentiment'] = sentiments[i]['score']
+        tweet['sentiment'] = sentiments[i]
         tweet['referenced_tweet']['embedding'] = embeddings[i].tolist()
 
     app.logger.info(
