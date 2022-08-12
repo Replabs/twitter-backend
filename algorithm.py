@@ -71,14 +71,15 @@ def _weigh_graph(G, topic, embedding_model, sentiment_weight=0.2, similarity_wei
 
     # The embedding of the topic.
     if topic_embedding is None:
-        topic_embedding = np.expand_dims(embedding_model.encode(topic), 0)
+        topic_embedding = embedding_model.encode(topic)
 
     # The embeddings of each edge in the MultiDiGraph.
     edge_embeddings = np.asarray(
         [np.array(G[e[0]][e[1]][e[2]]['embedding']) for e in G.edges(keys=True)])
 
     # Calculate the standardized similarities.
-    distances = distance.cdist(topic_embedding, edge_embeddings, "cosine")[0]
+    distances = distance.cdist(np.expand_dims(
+        topic_embedding, 0), edge_embeddings, "cosine")[0]
     similarities = minmax_scale(1 - distances, feature_range=(0, 1))
 
     # Calculate the standardized sentiments.

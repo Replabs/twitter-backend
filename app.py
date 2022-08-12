@@ -13,6 +13,8 @@ from db import db
 from graph import initialize_graphs
 from firebase_admin import auth
 from keywords import keywords
+import datetime
+
 
 app = Flask(__name__)
 
@@ -40,39 +42,39 @@ def hello_world():
     return "Hello World!"
 
 
-@app.route("/login", methods=['POST'])
-def log_in():
-    """Log in a Firebase user from a Twitter Oauth token."""
-    body = request.get_json()
+# @app.route("/login", methods=['POST'])
+# def log_in():
+#     """Log in a Firebase user from a Twitter Oauth token."""
+#     body = request.get_json()
 
-    #
-    # Use the access token to get the twitter user from the Twitter API.
-    #
-    access_token = body['access_token']
+#     #
+#     # Use the access token to get the twitter user from the Twitter API.
+#     #
+#     access_token = body['access_token']
 
-    if not access_token:
-        return {"error": "No access token."}
+#     if not access_token:
+#         return {"error": "No access token."}
 
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + access_token,
-        "expansions": ["profile_image_url"],
-    }
+#     headers = {
+#         "Content-Type": "application/json",
+#         "Authorization": "Bearer " + access_token,
+#         "expansions": ["profile_image_url"],
+#     }
 
-    response = requests.get(
-        "https://api.twitter.com/2/users/me", headers=headers)
+#     response = requests.get(
+#         "https://api.twitter.com/2/users/me", headers=headers)
 
-    user = response.json()['data']
+#     user = response.json()['data']
 
-    #
-    # Login the user manually.
-    #
-    token = auth.create_custom_token(user['id'])
+#     #
+#     # Login the user manually.
+#     #
+#     token = auth.create_custom_token(user['id'])
 
-    return {
-        "token": token.decode("utf-8"),
-        "user": user
-    }
+#     return {
+#         "token": token.decode("utf-8"),
+#         "user": user
+#     }
 
 
 @app.route("/proxy/oauth", methods=['POST'])
@@ -84,21 +86,24 @@ def proxy_oauth_token():
     response = requests.post(
         "https://api.twitter.com/2/oauth2/token", data=body, headers=headers)
 
+    if not response.ok:
+        return response.json(), 400
+
     return response.json()
 
 
 @app.route("/signup", methods=['POST'])
 def sign_up():
     """Create a user in Firebase from a Twitter Oauth token and return a Firebase login token."""
-    body = request.get_json()
-
     #
     # Use the access token to get the twitter user from the Twitter API.
     #
-    access_token = body['access_token']
+    access_token = request.headers['access_token']
+
+    print(access_token)
 
     if not access_token:
-        return {"error": "No access token."}
+        return {"error": "No access token."}, 400
 
     headers = {
         "Content-Type": "application/json",
@@ -108,6 +113,9 @@ def sign_up():
     response = requests.get(
         "https://api.twitter.com/2/users/me?user.fields=profile_image_url", headers=headers)
 
+    if not response.ok:
+        return response.json(), 400
+
     user = response.json()['data']
 
     #
@@ -115,7 +123,7 @@ def sign_up():
     #
     try:
         _ = auth.get_user(user['id'])
-        print("found user")
+        print("Found user")
     except:
         print("Did not find user")
         auth.create_user(
@@ -126,12 +134,7 @@ def sign_up():
 
         db.collection('users').document(user['id']).set(user)
 
-    #
-    # Login the user.
-    #
-    token = auth.create_custom_token(user['id'])
-
-    return {"user": user, "token": token.decode("utf-8")}
+    return {"user": user}
 
 
 @app.route("/results", methods=['GET'])
@@ -143,10 +146,10 @@ def get_results():
     #
     # Use the access token to get the twitter user from the Twitter API.
     #
-    access_token = request.headers["access_token"]
+    access_token = request.headers['access_token']
 
     if not access_token:
-        return {"error": "No access token."}
+        return {"error": "No access token."}, 400
 
     headers = {
         "Content-Type": "application/json",
@@ -154,8 +157,13 @@ def get_results():
     }
 
     response = requests.get(
-        "https://api.twitter.com/2/users/me", headers=headers)
+        "https://api.twitter.com/2/users/me?user.fields=profile_image_url", headers=headers)
 
+    if not response.ok:
+        return response.json(), 400
+
+    print(response)
+    print(response.text)
     user = response.json()['data']
 
     #
@@ -163,9 +171,9 @@ def get_results():
     #
     lists = db.collection('lists').where(u'owner_id', u'==', user['id']).get()
 
-    results = {}
+    list_results = {}
 
-    for doc in lists.docs:
+    for doc in lists:
         if doc.id not in graphs:
             print(f"Skipping list {doc.id}, not in memory.")
             continue
@@ -173,17 +181,27 @@ def get_results():
         # The graph of the list.
         G = graphs[doc.id].copy()
 
-        result = {}
+        if len(G.edges) == 0:
+            continue
+
+        keyword_results = {}
 
         # Add the pagerank results for each keyword.
         for keyword in keywords:
-            result[keyword] = pagerank(
+            keyword_results[keyword] = pagerank(
                 G, None, embedding_model, topic_embedding=keywords[keyword], n_results=10)
 
-    print(f"/requests took {time() - start} seconds.")
+        # Add the keyword results for a list to the list results.
+        list_results[doc.id] = keyword_results
 
-    # Return the results.
-    return {"results": results}
+    print(f"/results took {time() - start} seconds.")
+
+    expires_at = int(time() * 1000 + 24 * 60 * 60 * 1000)
+
+    return {
+        "lists": list_results,
+        "expires_at": expires_at
+    }
 
 
 @app.route("/update_graphs", methods=['POST'])
