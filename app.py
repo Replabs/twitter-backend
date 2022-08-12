@@ -1,19 +1,16 @@
-from email import header
-import os
 
+import os
 import requests
 from flask import Flask, request
 from flask_cors import CORS
 from time import time
-from sentence_transformers import SentenceTransformer
-from transformers import pipeline
 from api_keys import twitter_api_key
 from algorithm import pagerank
 from db import db
 from graph import initialize_graphs
 from firebase_admin import auth
 from keywords import keywords
-import datetime
+from models import embedding_model, sentiment_model
 
 
 app = Flask(__name__)
@@ -21,13 +18,6 @@ app = Flask(__name__)
 CORS(app)
 
 app.logger.info("Starting app.")
-
-# Download the embedding model.
-embedding_model = SentenceTransformer('./embedding_model')
-
-# Download the sentiment model.
-sentiment_task = pipeline(
-    'sentiment-analysis', model='./sentiment_model', tokenizer='./sentiment_model')
 
 graphs = {}
 
@@ -40,41 +30,6 @@ app.logger.info("Loaded model.")
 @app.route("/")
 def hello_world():
     return "Hello World!"
-
-
-# @app.route("/login", methods=['POST'])
-# def log_in():
-#     """Log in a Firebase user from a Twitter Oauth token."""
-#     body = request.get_json()
-
-#     #
-#     # Use the access token to get the twitter user from the Twitter API.
-#     #
-#     access_token = body['access_token']
-
-#     if not access_token:
-#         return {"error": "No access token."}
-
-#     headers = {
-#         "Content-Type": "application/json",
-#         "Authorization": "Bearer " + access_token,
-#         "expansions": ["profile_image_url"],
-#     }
-
-#     response = requests.get(
-#         "https://api.twitter.com/2/users/me", headers=headers)
-
-#     user = response.json()['data']
-
-#     #
-#     # Login the user manually.
-#     #
-#     token = auth.create_custom_token(user['id'])
-
-#     return {
-#         "token": token.decode("utf-8"),
-#         "user": user
-#     }
 
 
 @app.route("/proxy/oauth", methods=['POST'])
@@ -189,7 +144,7 @@ def get_results():
         # Add the pagerank results for each keyword.
         for keyword in keywords:
             keyword_results[keyword] = pagerank(
-                G, None, embedding_model, topic_embedding=keywords[keyword], n_results=10)
+                G, None, topic_embedding=keywords[keyword], n_results=10)
 
         # Add the keyword results for a list to the list results.
         list_results[doc.id] = keyword_results
@@ -258,61 +213,10 @@ def query_twitter():
     G = graphs[list_id].copy()
 
     # Run the pagerank algorithm.
-    results = pagerank(G, topic, embedding_model)
+    results = pagerank(G, topic)
 
     # Return the results.
     return {"results": results}
-
-
-@app.route("/embed_all", methods=["POST"])
-def embed_all():
-    """Embed all tweets. Might take minutes to finish.
-
-    Parameters:
-    -----
-    api_key : string
-        The api key for twitter."""
-
-    start = time()
-
-    body = request.json()
-
-    # Verify the API key.
-    if body['api_key'] != twitter_api_key:
-        app.logger.info("invalid twitter api key")
-        return {"error": "invalid api key"}
-
-    # Stream the firebase docs.
-    docs = db.collection('tweets').stream()
-
-    # Create items from all firestore docs.
-    tweets = map(lambda x: {**x.to_dict(), 'id': x.id}, docs)
-
-    # Exclude tweets without a referenced tweet.
-    tweets = list(filter(lambda t: t['referenced_tweet'], tweets))
-
-    # Create the embedding vectors for the text of the referenced tweet.
-    embeddings = embedding_model.encode(
-        [t['referenced_tweet']['text'] for t in tweets])
-
-    # Create the sentiment scores for the text of the tweet.
-    sentiments = sentiment_task([t['text']
-                                 for t in tweets])
-
-    for i, tweet in enumerate(tweets):
-        tweet['sentiment'] = sentiments[i]['score']
-        tweet['referenced_tweet']['embedding'] = embeddings[i].tolist()
-
-    app.logger.info(
-        f"Created embeddings for {len(tweets)} tweets, took {time() - start}s.")
-
-    # Update the tweets in firestore.
-    for tweet in tweets:
-        db.collection('tweets').document(tweet['id']).update(tweet)
-
-    print(f"finished. Took {time() - start}")
-
-    return {"success": True}
 
 
 @app.route("/embed", methods=['POST'])
@@ -348,11 +252,11 @@ def create_twitter_embeddings():
     tweets = filter(lambda x: 'referenced_tweet' in x, tweets)
 
     # Create the embedding vectors for the text of the referenced tweet.
-    embeddings = embedding_model.encode(
+    embeddings = embedding_model(
         [t['referenced_tweet']['text'] for t in tweets])
 
     # Create the sentiment scores for the text of the tweet.
-    sentiments = sentiment_task([t['text']
+    sentiments = sentiment_model([t['text']
                                  for t in tweets])
 
     # Add the embeddings and sentiments to the tweets.

@@ -1,5 +1,6 @@
 """Initialize the graphs from firestore data."""
 
+import os
 from datetime import datetime
 from os.path import exists
 from db import db
@@ -61,9 +62,15 @@ def initialize_graphs(graphs):
     lists = db.collection('lists').stream()
     lists = map(lambda x: x.to_dict(), lists)
 
+    day = datetime.now().strftime("%m%d%y")
+
+    # Delete old graphs.
+    for file_name in os.listdir("graphs"):
+        if not file_name.endswith(f"{day}.gpickle"):
+            os.remove(os.path.join("graphs", file_name))
+
     for l in lists:
         print(f"Initializing graph {l['name']}.")
-        day = datetime.now().strftime("%m%d%y")
 
         # The path for the pickle file.
         path = f"graphs/{l['id']}_{day}.gpickle"

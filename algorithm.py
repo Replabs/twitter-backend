@@ -7,6 +7,8 @@ from sklearn.preprocessing import minmax_scale
 from statistics import mean
 from time import time
 
+from models import embedding_model
+
 
 def _edge_data(G, e):
     """Return the data dictionary from an edge tuple."""
@@ -40,7 +42,7 @@ def _average_incoming_weights(G, node, exp=None):
     return mean_incoming
 
 
-def _weigh_graph(G, topic, embedding_model, sentiment_weight=0.2, similarity_weight=1.0, topic_embedding=None):
+def _weigh_graph(G, topic, sentiment_weight=0.2, similarity_weight=1.0, topic_embedding=None):
     """Weight the graph against the topic.
 
     Parameters
@@ -55,9 +57,6 @@ def _weigh_graph(G, topic, embedding_model, sentiment_weight=0.2, similarity_wei
         The embedding of the topic to weight the graph against.
         Used instead of topic if provided.
 
-    embedding_model : SentenceTransformer
-        The embedding model used to create embeddings for the topic.
-
     sentiment_weight : number
         How much the sentiment should affect the weights.
 
@@ -71,7 +70,7 @@ def _weigh_graph(G, topic, embedding_model, sentiment_weight=0.2, similarity_wei
 
     # The embedding of the topic.
     if topic_embedding is None:
-        topic_embedding = embedding_model.encode(topic)
+        topic_embedding = embedding_model(topic)
 
     # The embeddings of each edge in the MultiDiGraph.
     edge_embeddings = np.asarray(
@@ -122,7 +121,7 @@ def _weigh_graph(G, topic, embedding_model, sentiment_weight=0.2, similarity_wei
     return F
 
 
-def pagerank(G, topic, embedding_model, n_results=None, topic_embedding=None):
+def pagerank(G, topic, n_results=None, topic_embedding=None):
     """Run the main pagerank algorithm.
 
     Parameters
@@ -143,8 +142,7 @@ def pagerank(G, topic, embedding_model, n_results=None, topic_embedding=None):
     """
 
     # Weigh the graph.
-    G = _weigh_graph(G, topic, embedding_model,
-                     topic_embedding=topic_embedding)
+    G = _weigh_graph(G, topic, topic_embedding=topic_embedding)
 
     # Create a personalization vector by averaging all incoming weights and applying
     # an exponential value to the result.
