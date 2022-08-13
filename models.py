@@ -1,4 +1,4 @@
-from flask import request
+import requests
 from api_keys import embedding_api_key, sentiment_api_key
 
 
@@ -7,7 +7,7 @@ def embedding_model(text):
 
     url = "https://embedding-model-bo3523uimq-uc.a.run.app/"
 
-    response = request.post(url, data={
+    response = requests.post(url, data={
         'api_key': embedding_api_key,
         'text': text,
     })
@@ -22,7 +22,7 @@ def sentiment_model(text):
 
     url = "https://sentiment-model-bo3523uimq-uc.a.run.app/"
 
-    response = request.post(url, data={
+    response = requests.post(url, data={
         'api_key': sentiment_api_key,
         'text': text,
     })
