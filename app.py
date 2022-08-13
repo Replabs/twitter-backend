@@ -249,7 +249,7 @@ def create_twitter_embeddings():
     app.logger.info(f"Creating embeddings for {len(tweets)} tweets...")
 
     # Filter out tweets without a referenced_tweet.
-    tweets = filter(lambda x: 'referenced_tweet' in x, tweets)
+    tweets = list(filter(lambda x: 'referenced_tweet' in x, tweets))
 
     # Create the embedding vectors for the text of the referenced tweet.
     embeddings = embedding_model(
@@ -262,14 +262,14 @@ def create_twitter_embeddings():
     # Add the embeddings and sentiments to the tweets.
     for i, tweet in enumerate(tweets):
         tweet['sentiment'] = sentiments[i]
-        tweet['referenced_tweet']['embedding'] = embeddings[i].tolist()
+        tweet['referenced_tweet']['embedding'] = embeddings[i]
 
     app.logger.info(
         f"Created embeddings for {len(tweets)} tweets, took {time() - start}s.")
 
     # Update the tweets in firestore.
     for tweet in tweets:
-        db.collection('tweets').document(tweet.id).update(tweet)
+        db.collection('tweets').document(tweet['id']).update(tweet)
 
     return {"success": True}
 
