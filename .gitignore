@@ -5,4 +5,3 @@ __pycache__/*
 firebase_service_account_key.json
 api_keys.py
 graphs/
-

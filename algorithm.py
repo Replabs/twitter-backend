@@ -1,5 +1,4 @@
 """The PageRank algorithm."""
-
 import networkx as nx
 import numpy as np
 from scipy.spatial import distance
@@ -42,6 +41,21 @@ def _average_incoming_weights(G, node, exp=None):
     return mean_incoming
 
 
+def sentiment_score(sentiment):
+    """Get the sentiment score from the sentiment"""
+    return 1
+
+    if type(sentiment) is float:
+        return sentiment
+
+    if sentiment['label'] == 'Negative':
+        return -1 * sentiment['score']
+    elif sentiment['label'] == 'Positive':
+        return 1 * sentiment['score']
+
+    return 0
+
+
 def _weigh_graph(G, topic, sentiment_weight=0.2, similarity_weight=1.0, topic_embedding=None):
     """Weight the graph against the topic.
 
@@ -68,6 +82,9 @@ def _weigh_graph(G, topic, sentiment_weight=0.2, similarity_weight=1.0, topic_em
 
     start = time()
 
+    print(
+        f"Weighing graph with {len(G.edges)} edges and {len(G.nodes)} nodes.")
+
     # The embedding of the topic.
     if topic_embedding is None:
         topic_embedding = embedding_model(topic)
@@ -83,7 +100,7 @@ def _weigh_graph(G, topic, sentiment_weight=0.2, similarity_weight=1.0, topic_em
 
     # Calculate the standardized sentiments.
     sentiments = np.asarray(
-        [G[e[0]][e[1]][e[2]]['sentiment'] for e in G.edges(keys=True)])
+        [sentiment_score(G[e[0]][e[1]][e[2]]['sentiment']) for e in G.edges(keys=True)])
     sentiments = minmax_scale(sentiments, feature_range=(-1, 1))
 
     # Calculate the weights.
@@ -162,7 +179,7 @@ def pagerank(G, topic, n_results=None, topic_embedding=None):
 
     # Truncate the results if applicable.
     if n_results is not None and len(results) > n_results:
-        results = results[n_results]
+        results = results[:n_results]
 
     # Return the results.
     return results
