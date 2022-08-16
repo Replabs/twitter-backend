@@ -11,6 +11,7 @@ from graph import initialize_graphs
 from firebase_admin import auth
 from keywords import keywords
 from models import embedding_model, sentiment_model
+from firebase_admin import firestore
 from pytwitter import Api
 
 
@@ -78,13 +79,9 @@ def sign_up():
         "https://api.twitter.com/2/users/me?user.fields=profile_image_url", headers=headers)
 
     if not response.ok:
-        print("foo")
-        print(response.text)
         return response.json(), 400
 
     user = response.json()['data']
-
-    print(user['id'])
 
     #
     # Get the user's lists.
@@ -184,7 +181,7 @@ def get_results():
     }
 
 
-@ app.route("/update_graphs", methods=['POST'])
+@app.route("/update_graphs", methods=['POST'])
 def update_graphs():
     """Update the graphs in memory and on disk from the latest Firestore data.
 
@@ -244,7 +241,7 @@ def query_twitter():
     return {"results": results}
 
 
-@ app.route("/embed", methods=['POST'])
+@app.route("/embed", methods=['POST'])
 def create_twitter_embeddings():
     """Calculate embedding vectors and sentiment scores for tweets.
 
@@ -297,6 +294,106 @@ def create_twitter_embeddings():
         db.collection('tweets').document(tweet['id']).update(tweet)
 
     return {"success": True}
+
+
+@app.route("/onboarding_finished", methods=["POST"])
+def onboarding_finished():
+    """Post the lists and types to firebase, making the user ready for crawling."""
+
+    #
+    # Use the access token to get the twitter user from the Twitter API.
+    #
+    access_token = request.headers['access_token']
+
+    if not access_token:
+        return {"error": "No access token."}, 400
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + access_token,
+    }
+
+    response = requests.get(
+        "https://api.twitter.com/2/users/me?user.fields=profile_image_url", headers=headers)
+
+    if not response.ok:
+        return response.json(), 400
+
+    body = request.get_json()
+    reputation_type = body['type']
+    reputation_lists = body['lists']
+    user = response.json()['data']
+
+    if not reputation_type or not reputation_lists:
+        return {"error": "Missing data"}, 400
+
+    #
+    # Add the selected lists to Firestore.
+    #
+    for list_id in reputation_lists:
+        list_response = twitter_api.get_list(list_id, return_json=True)
+        members_response = twitter_api.get_list_members(
+            list_id, user_fields="profile_image_url", return_json=True)
+
+        db.collection('lists').document(list_id).set({
+            "id": list_id,
+            "name": list_response['data']['name'],
+            "owner_id": user['id'],
+            "members": members_response['data']
+        })
+
+    #
+    # Update the reputation type for the user in Firestore.
+    #
+    reputation_type_embedding = embedding_model(reputation_type)
+
+    db.collection('users').document(user['id']).set({
+        "reputation_types": [
+            {
+                "text": reputation_type,
+                "embedding": reputation_type_embedding
+            }
+        ]
+    }, merge=True)
+
+    return {"success": True}
+
+
+@app.route("/sync_status", methods=["GET"])
+def get_sync_status():
+    """Get the syncing status for a user."""
+    #
+    # Use the access token to verify the user.
+    #
+    access_token = request.headers['access_token']
+
+    if not access_token:
+        return {"error": "No access token."}, 400
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + access_token,
+    }
+
+    response = requests.get(
+        "https://api.twitter.com/2/users/me?user.fields=profile_image_url", headers=headers)
+
+    if not response.ok:
+        return response.json(), 400
+
+    user = response.json()['data']
+
+    crawls = db.collection('crawls').order_by(
+        u'completed_at', direction=firestore.Query.DESCENDING).limit(1).get()
+    crawled_lists = crawls[0].to_dict()['crawled_lists']
+
+    lists = db.collection('lists').where(u'owner_id', u'==', user['id']).get()
+    lists = [x.to_dict()['id'] for x in lists]
+
+    return {
+        "lists_done": len([x for x in lists if x in crawled_lists]),
+        "lists_total": len(lists)
+    }
 
 
 if __name__ == "__main__":
