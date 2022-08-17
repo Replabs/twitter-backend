@@ -83,6 +83,10 @@ def sign_up():
 
     user = response.json()['data']
 
+    # Save the access token to the user in Firebase. This access token is used to
+    # verify that the user is the correct firebase user from now on.
+    user['access_token'] = access_token
+
     #
     # Get the user's lists.
     #
@@ -90,20 +94,18 @@ def sign_up():
     lists = response['data']
 
     #
-    # Add the user to Firebase, if it doesn't already exist.
+    # Add the user to Firebase, if it doesn' zt already exist.
     #
     try:
         _ = auth.get_user(user['id'])
-        print("Found user")
     except:
-        print("Did not find user")
         auth.create_user(
             uid=user['id'],
             display_name=user['username'],
             photo_url=user['profile_image_url']
         )
 
-        db.collection('users').document(user['id']).set(user)
+    db.collection('users').document(user['id']).set(user, merge=True)
 
     return {"user": user, "lists": lists}
 
@@ -111,34 +113,25 @@ def sign_up():
 @app.route("/results", methods=['GET'])
 def get_results():
     """Get the results for a user."""
-
     start = time()
 
     #
-    # Use the access token to get the twitter user from the Twitter API.
+    # Verify the user's access token.
     #
     access_token = request.headers['access_token']
+    user_id = request.headers['user_id']
 
-    if not access_token:
-        return {"error": "No access token."}, 400
-
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + access_token,
-    }
-
-    response = requests.get(
-        "https://api.twitter.com/2/users/me?user.fields=profile_image_url", headers=headers)
-
-    if not response.ok:
-        return response.json(), 400
-
-    user = response.json()['data']
+    user = db.collection('users').document(user_id).get()
+    user = user.to_dict()
+    if user['access_token'] != access_token:
+        return {"error": "Invalid access token."}, 400
 
     #
     # Get the PageRank results for the user.
     #
     lists = db.collection('lists').where(u'owner_id', u'==', user['id']).get()
+
+    fb_user = db.collection('users').document(user['id']).get()
 
     list_results = {}
 
@@ -153,23 +146,23 @@ def get_results():
         if len(G.edges) == 0:
             continue
 
-        keyword_results = {}
+        type_results = {}
 
-        # Add the pagerank results for each keyword.
-        for keyword in keywords:
+        # Add the pagerank results for each type.
+        for reputation_type in fb_user.to_dict()['reputation_types']:
             # Calculate pagerank for the graph.
             pr = pagerank(
-                G, None, topic_embedding=keywords[keyword], n_results=4)
+                G, None, topic_embedding=reputation_type['embedding'], n_results=4)
 
             # Replace the IDs of the PageRank results with the user object.
             def get_user(result): return next(
                 filter(lambda y: y['id'] == result[0], list_doc.to_dict()['members']))
 
-            # Add the usernames to the results for the keyword.
-            keyword_results[keyword] = list(map(get_user, pr))
+            # Add the usernames to the results for the type.
+            type_results[reputation_type['text']] = list(map(get_user, pr))
 
-        # Add all the keyword results for a list to the list results.
-        list_results[list_doc.to_dict()['name']] = keyword_results
+        # Add all the type results for a list to the list results.
+        list_results[list_doc.to_dict()['name']] = type_results
 
     print(f"/results took {time() - start} seconds.")
 
@@ -301,28 +294,19 @@ def onboarding_finished():
     """Post the lists and types to firebase, making the user ready for crawling."""
 
     #
-    # Use the access token to get the twitter user from the Twitter API.
+    # Verify the user's access token.
     #
     access_token = request.headers['access_token']
+    user_id = request.headers['user_id']
 
-    if not access_token:
-        return {"error": "No access token."}, 400
-
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + access_token,
-    }
-
-    response = requests.get(
-        "https://api.twitter.com/2/users/me?user.fields=profile_image_url", headers=headers)
-
-    if not response.ok:
-        return response.json(), 400
+    user = db.collection('users').document(user_id).get()
+    user = user.to_dict()
+    if user['access_token'] != access_token:
+        return {"error": "Invalid access token."}, 400
 
     body = request.get_json()
     reputation_type = body['type']
     reputation_lists = body['lists']
-    user = response.json()['data']
 
     if not reputation_type or not reputation_lists:
         return {"error": "Missing data"}, 400
@@ -363,25 +347,15 @@ def onboarding_finished():
 def get_sync_status():
     """Get the syncing status for a user."""
     #
-    # Use the access token to verify the user.
+    # Verify the user's access token.
     #
     access_token = request.headers['access_token']
+    user_id = request.headers['user_id']
 
-    if not access_token:
-        return {"error": "No access token."}, 400
-
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + access_token,
-    }
-
-    response = requests.get(
-        "https://api.twitter.com/2/users/me?user.fields=profile_image_url", headers=headers)
-
-    if not response.ok:
-        return response.json(), 400
-
-    user = response.json()['data']
+    user = db.collection('users').document(user_id).get()
+    user = user.to_dict()
+    if user['access_token'] != access_token:
+        return {"error": "Invalid access token."}, 400
 
     crawls = db.collection('crawls').order_by(
         u'completed_at', direction=firestore.Query.DESCENDING).limit(1).get()

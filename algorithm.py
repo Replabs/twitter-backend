@@ -43,8 +43,8 @@ def _average_incoming_weights(G, node, exp=None):
 
 def sentiment_score(sentiment):
     """Get the sentiment score from the sentiment"""
-    return 1
 
+    # Legacy sentiment scores are floats, not dicts.
     if type(sentiment) is float:
         return sentiment
 
