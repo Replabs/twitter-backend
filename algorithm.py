@@ -124,10 +124,20 @@ def _weigh_graph(G, topic, sentiment_weight=0.2, similarity_weight=1.0, topic_em
             average_weight = mean([pow(max(0, weights[i + j]), 2)
                                   for j in range(len(node_pair_edges))])
 
+            reply_tweet_ids = [node_pair_edges[j]['reply_tweet_id']
+                               for j in range(len(node_pair_edges))]
+            reply_tweet_ids = sorted(
+                reply_tweet_ids, key=lambda x: weights[i + reply_tweet_ids.index(x)], reverse=True)
+
+            referenced_tweets = [node_pair_edges[j]['original_tweet']
+                                 for j in range(len(node_pair_edges))]
+            referenced_tweets = sorted(
+                referenced_tweets, key=lambda x: weights[i + referenced_tweets.index(x)], reverse=True)
+
             # Summarize the edge data.
             data = {
-                'reply_tweets': [node_pair_edges[j]['reply_tweet'] for j in range(len(node_pair_edges))],
-                'referenced_tweets': [node_pair_edges[j]['original_tweet'] for j in range(len(node_pair_edges))],
+                'reply_tweet_ids': reply_tweet_ids,
+                'referenced_tweets': referenced_tweets,
                 'weight': average_weight
             }
 
@@ -179,7 +189,21 @@ def pagerank(G, topic, n_results=None, topic_embedding=None):
 
     # Truncate the results if applicable.
     if n_results is not None and len(results) > n_results:
-        results = results[:n_results]
+        results = results[: n_results]
+
+    # Add the top tweets to the results.
+    def add_top_tweets(result):
+        user_edges = filter(lambda e: e[1] == result[0], G.in_edges)
+
+        highest_weights = list(sorted(
+            user_edges, key=lambda e: G[e[0]][e[1]]['weight'], reverse=True))[:3]
+
+        def twitter_url(edge):
+            return f"https://twitter.com/{edge[0]}/status/{G[edge[0]][edge[1]]['reply_tweet_ids'][0]}"
+
+        top_tweets = [twitter_url(e) for e in highest_weights]
+
+        return (result[0], result[1], top_tweets)
 
     # Return the results.
-    return results
+    return [add_top_tweets(r) for r in results]

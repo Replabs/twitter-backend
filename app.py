@@ -13,6 +13,7 @@ from keywords import keywords
 from models import embedding_model, sentiment_model
 from firebase_admin import firestore
 from pytwitter import Api
+from datetime import datetime
 
 
 app = Flask(__name__)
@@ -65,8 +66,6 @@ def sign_up():
     #
     access_token = request.headers['access_token']
 
-    print(access_token)
-
     if not access_token:
         return {"error": "No access token."}, 400
 
@@ -90,7 +89,8 @@ def sign_up():
     #
     # Get the user's lists.
     #
-    response = twitter_api.get_user_owned_lists(user['id'], return_json=True)
+    response = twitter_api.get_user_followed_lists(
+        user['id'], return_json=True)
     lists = response['data']
 
     #
@@ -155,8 +155,13 @@ def get_results():
                 G, None, topic_embedding=reputation_type['embedding'], n_results=4)
 
             # Replace the IDs of the PageRank results with the user object.
-            def get_user(result): return next(
-                filter(lambda y: y['id'] == result[0], list_doc.to_dict()['members']))
+            def get_user(result):
+                user = next(
+                    filter(lambda y: y['id'] == result[0], list_doc.to_dict()['members']))
+
+                user['top_tweets'] = result[2]
+
+                return user
 
             # Add the usernames to the results for the type.
             type_results[reputation_type['text']] = list(map(get_user, pr))
@@ -166,6 +171,7 @@ def get_results():
 
     print(f"/results took {time() - start} seconds.")
 
+    # The results expire in a day.
     expires_at = int(time() * 1000 + 24 * 60 * 60 * 1000)
 
     return {
@@ -201,7 +207,7 @@ def update_graphs():
     return {"success": True}
 
 
-@ app.route("/pagerank", methods=['POST'])
+@app.route("/pagerank", methods=['POST'])
 def query_twitter():
     """Get the PageRank scores for a list, given a topic.
 
@@ -282,9 +288,16 @@ def create_twitter_embeddings():
     app.logger.info(
         f"Created embeddings for {len(tweets)} tweets, took {time() - start}s.")
 
+    #
     # Update the tweets in firestore.
+    #
+    batch = db.batch()
+
     for tweet in tweets:
-        db.collection('tweets').document(tweet['id']).update(tweet)
+        tweet['embedded_at'] = datetime.now()
+        batch.update(db.collection('tweets').document(tweet['id']), tweet)
+
+    batch.commit()
 
     return {"success": True}
 

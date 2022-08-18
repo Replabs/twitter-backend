@@ -45,6 +45,7 @@ def _create_edge(tweet):
         'sentiment': tweet['sentiment'] if 'sentiment' in tweet else 1,
         'embedding': np.array(tweet['referenced_tweet']['embedding']),
         'original_tweet': tweet['referenced_tweet']['text'],
+        'reply_tweet_id': tweet['id'],
         'reply_tweet': tweet['text'],
     }
 
