@@ -1,7 +1,7 @@
-# Flask API
+# Twitter Backend.
 
-This is a flask API deployed on Google Cloud Run.
+This is a flask API deployed on Google Cloud Run as a Docker container.
 
 To deploy, push to main.
 
-Available at https://replabs-flask-app-aucndxjanq-ew.a.run.app
+Available at https://backend-bo3523uimq-uc.a.run.app/
