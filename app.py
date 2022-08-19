@@ -90,7 +90,7 @@ def sign_up():
     #
     response = twitter_api.get_user_followed_lists(
         user['id'], return_json=True)
-    lists = response['data']
+    lists = [] if 'data' not in response else response['data']
 
     #
     # Add the user to Firebase, if it doesn' zt already exist.
