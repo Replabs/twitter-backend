@@ -129,9 +129,7 @@ def get_results():
     # Get the PageRank results for the user.
     #
     lists = db.collection('lists').where(u'owner_id', u'==', user['id']).get()
-
     fb_user = db.collection('users').document(user['id']).get()
-
     list_results = {}
 
     for list_doc in lists:
@@ -157,9 +155,7 @@ def get_results():
             def get_user(result):
                 user = next(
                     filter(lambda y: y['id'] == result[0], list_doc.to_dict()['members']))
-
                 user['top_tweets'] = result[2]
-
                 return user
 
             # Add the usernames to the results for the type.
@@ -167,6 +163,27 @@ def get_results():
 
         # Add all the type results for a list to the list results.
         list_results[list_doc.to_dict()['name']] = type_results
+
+    #
+    # Add in the default 'Geopolitics' list as a demo list.
+    #
+    if '1483456727219683332' not in [x.id for x in lists]:
+        list_doc = db.collection(
+            'lists').document('1483456727219683332').get()
+        topic = 'Geopolitics'
+        pr = pagerank(
+            graphs[list_doc.id].copy(), topic, n_results=6)
+
+        # Replace the IDs of the PageRank results with the user object.
+        def get_geopolitics_user(result):
+            user = next(
+                filter(lambda y: y['id'] == result[0], list_doc.to_dict()['members']))
+            user['top_tweets'] = result[2]
+            return user
+
+        list_results[list_doc.to_dict()['name']] = {
+            topic: list(map(get_geopolitics_user, pr))
+        }
 
     print(f"/results took {time() - start} seconds.")
 
@@ -369,15 +386,11 @@ def get_sync_status():
     if user['access_token'] != access_token:
         return {"error": "Invalid access token."}, 400
 
-    crawls = db.collection('crawls').order_by(
-        u'completed_at', direction=firestore.Query.DESCENDING).limit(1).get()
-    crawled_lists = crawls[0].to_dict()['crawled_lists']
-
     lists = db.collection('lists').where(u'owner_id', u'==', user['id']).get()
     lists = [x.to_dict()['id'] for x in lists]
 
     return {
-        "lists_done": len([x for x in lists if x in crawled_lists]),
+        "lists_done": len([x for x in lists if x in graphs]),
         "lists_total": len(lists)
     }
 
