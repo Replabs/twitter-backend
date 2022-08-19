@@ -9,7 +9,6 @@ from algorithm import pagerank
 from db import db
 from graph import initialize_graphs
 from firebase_admin import auth
-from keywords import keywords
 from models import embedding_model, sentiment_model
 from firebase_admin import firestore
 from pytwitter import Api
