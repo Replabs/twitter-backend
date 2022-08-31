@@ -56,7 +56,7 @@ def sentiment_score(sentiment):
     return 0
 
 
-def _weigh_graph(G, topic, sentiment_weight=0.2, similarity_weight=1.0, topic_embedding=None):
+def weigh_graph(G, topic, sentiment_weight=0.2, similarity_weight=1.0, topic_embedding=None):
     """Weight the graph against the topic.
 
     Parameters
@@ -169,7 +169,7 @@ def pagerank(G, topic, n_results=None, topic_embedding=None):
     """
 
     # Weigh the graph.
-    G = _weigh_graph(G, topic, topic_embedding=topic_embedding)
+    G = weigh_graph(G, topic, topic_embedding=topic_embedding)
 
     # Create a personalization vector by averaging all incoming weights and applying
     # an exponential value to the result.

@@ -1,11 +1,13 @@
 
 import os
+from random import random
 import requests
-from flask import Flask, request
+import networkx as nx
+from flask import Flask, request, send_from_directory
 from flask_cors import CORS
 from time import time
 from api_keys import twitter_api_key, consumer_key, consumer_secret, access_token, access_secret
-from algorithm import pagerank
+from algorithm import pagerank, weigh_graph
 from db import db
 from graph import initialize_graphs
 from firebase_admin import auth
@@ -13,6 +15,7 @@ from models import embedding_model, sentiment_model
 from firebase_admin import firestore
 from pytwitter import Api
 from datetime import datetime
+from pyvis.network import Network
 
 
 app = Flask(__name__)
@@ -393,6 +396,96 @@ def get_sync_status():
         "lists_done": len([x for x in lists if x in graphs]),
         "lists_total": len(lists)
     }
+
+
+@app.route("/graph/<string:list_id>/<string:topic>", methods=["GET"])
+def show_graph(list_id, topic):
+    """Returns an HTML view of the graph."""
+
+    show_buttons = 'show_buttons' in request.args
+
+    # The graph for the list.
+    G = graphs[list_id].copy()
+
+    # Run the pagerank algorithm.
+    results = pagerank(G, topic)
+
+    # Weight the graph for the topic.
+    G = weigh_graph(G, topic)
+
+    list_doc = db.collection(
+        'lists').document(list_id).get()
+    members = list_doc.to_dict()['members']
+
+    #
+    # Add the node attributes.
+    #
+    nx.set_node_attributes(G, values=dict(
+        [(x[0], x[1] * 1000) for x in results]), name="size")
+    nx.set_node_attributes(G, values=dict(
+        [(x[0], next(m['username'] for m in members if m['id'] == x[0])) for x in results]), name="label")
+
+    #
+    # Add the edge attributes
+    #
+    d = {}
+    for e in G.edges(data=True):
+        d[(e[0], e[1])] = e[2]['weight'] / 100
+
+    nx.set_edge_attributes(G, d, name="value")
+
+    # Create the Network.
+    net = Network('100%', '100%' if not show_buttons else '80%', directed=True)
+
+    #
+    # Add the options if necessary.
+    #
+    if show_buttons:
+        net.show_buttons(filter_=["physics", "edges"])
+    else:
+        net.set_options("""
+            const options = {
+            "edges": {
+                "color": {
+                "inherit": true
+                },
+                "hoverWidth": 3.3,
+                "physics": false,
+                "scaling": {
+                "min": 0,
+                "label": {
+                    "drawThreshold": 1
+                }
+                },
+                "selfReferenceSize": null,
+                "selfReference": {
+                "angle": 0.7853981633974483,
+                "renderBehindTheNode": false
+                },
+                "smooth": false
+            },
+            "physics": {
+                "hierarchicalRepulsion": {
+                "centralGravity": 0,
+                "avoidOverlap": null
+                },
+                "maxVelocity": 30,
+                "minVelocity": 0.35,
+                "solver": "hierarchicalRepulsion"
+            }
+            }
+        """)
+
+    net.from_nx(G)
+
+    try:
+        directory = "tmp"
+        filename = f'{list_id}_{topic}_pyvis.html'
+        net.save_graph(f"{directory}/{filename}")
+        return send_from_directory(directory, filename)
+    except Exception as error:
+        print(error)
+        return {"error": "failed rendering graph"}
 
 
 if __name__ == "__main__":
