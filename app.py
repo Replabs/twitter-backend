@@ -440,6 +440,9 @@ def get_list_info(list_id):
 @app.route("/twitter_list/<string:list_id>", methods=["POST"])
 def add_list(list_id):
     """Add a list to crawl."""
+
+    body = request.get_json()
+
     list_response = twitter_api.get_list(
         list_id, expansions="owner_id", return_json=True)
     members_response = twitter_api.get_list_members(
@@ -447,9 +450,10 @@ def add_list(list_id):
 
     db.collection('lists').document(list_id).set({
         "id": list_id,
+        "members": members_response['data'],
         "name": list_response['data']['name'],
         "owner_id": list_response['data']['owner_id'],
-        "members": members_response['data']
+        "requested_by": body['username'] if 'username' in body else None
     })
 
     return {
