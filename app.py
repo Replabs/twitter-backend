@@ -4,6 +4,7 @@ import json
 import requests
 from flask import Flask, request
 from flask_cors import CORS
+import networkx as nx
 from time import time
 from api_keys import twitter_api_key, consumer_key, consumer_secret, access_token, access_secret
 from algorithm.twitter import pagerank
@@ -466,7 +467,7 @@ def get_twitter_graph(list_id, topic):
     """Returns the JSON data of a twitter graph."""
 
     # Check that there is a graph ready for the list_id.
-    if list_id not in twitter_graphs:
+    if list_id not in twitter_graphs or nx.is_empty(twitter_graphs[list_id]):
         doc = db.collection('lists').document(list_id).get()
         return {
             "exists": False,
