@@ -1,8 +1,12 @@
 """Initialize the graphs from firestore data."""
 
+from cgi import test
+import itertools
+import json
 import os
 from datetime import datetime
 from os.path import exists
+import random
 from db import db
 import networkx as nx
 import numpy as np
